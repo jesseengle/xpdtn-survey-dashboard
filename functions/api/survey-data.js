@@ -1,4 +1,4 @@
-// functions/api/survey-data.js — display-aware + diagnostics (wrangler-safe)
+// functions/api/survey-data.js — display-aware + diagnostics (Q1 fixes)
 
 export async function onRequest(context) {
   const diag = {
@@ -17,10 +17,11 @@ export async function onRequest(context) {
     const API_KEY = context.env.GOOGLE_API_KEY;
     const SHEET_NAME = context.env.SHEET_NAME || "Sheet1";
 
-    const ok = (obj) =>
-      new Response(JSON.stringify(obj, null, 2), {
+    const ok = function (obj) {
+      return new Response(JSON.stringify(obj, null, 2), {
         headers: { "content-type": "application/json" }
       });
+    };
 
     // 1) env check
     diag.steps.push("check-env");
@@ -31,8 +32,8 @@ export async function onRequest(context) {
     }
     if (!API_KEY) {
       diag.warning = "Missing GOOGLE_API_KEY; trying CSV fallback.";
-      const fb = await tryCsvFallback(diag, { SHEET_ID, SHEET_GID: "0" });
-      return ok({ success: false, message: "No API key; CSV fallback", diagnostics: diag, questions: fb.questions });
+      const fb2 = await tryCsvFallback(diag, { SHEET_ID, SHEET_GID: "0" });
+      return ok({ success: false, message: "No API key; CSV fallback", diagnostics: diag, questions: fb2.questions });
     }
 
     // 2) fetch from Sheets API
@@ -48,8 +49,8 @@ export async function onRequest(context) {
       apiJson = await r.json();
     } catch (e) {
       diag.sheets_api_error = String(e && e.message ? e.message : e);
-      const fb = await tryCsvFallback(diag, { SHEET_ID, SHEET_GID: "0" });
-      return ok({ success: false, message: "Sheets API failed; CSV fallback", diagnostics: diag, questions: fb.questions });
+      const fb3 = await tryCsvFallback(diag, { SHEET_ID, SHEET_GID: "0" });
+      return ok({ success: false, message: "Sheets API failed; CSV fallback", diagnostics: diag, questions: fb3.questions });
     }
 
     // 3) parse rows
@@ -62,8 +63,8 @@ export async function onRequest(context) {
     });
     if (headerIndex === -1) {
       diag.parse_error = "No non-empty rows found.";
-      const fb = await tryCsvFallback(diag, { SHEET_ID, SHEET_GID: "0" });
-      return ok({ success: false, message: "No non-empty rows; CSV fallback", diagnostics: diag, questions: fb.questions });
+      const fb4 = await tryCsvFallback(diag, { SHEET_ID, SHEET_GID: "0" });
+      return ok({ success: false, message: "No non-empty rows; CSV fallback", diagnostics: diag, questions: fb4.questions });
     }
 
     const headers = values[headerIndex].map(function (v) { return String(v || "").trim(); });
@@ -75,8 +76,8 @@ export async function onRequest(context) {
     const questions = buildQuestionsFromHeadersAndRows(headers, rows);
     if (!questions.length) {
       diag.aggregation_note = "Aggregation produced 0 questions.";
-      const fb = await tryCsvFallback(diag, { SHEET_ID, SHEET_GID: "0" });
-      return ok({ success: false, message: "Aggregation empty; CSV fallback", diagnostics: diag, questions: fb.questions });
+      const fb5 = await tryCsvFallback(diag, { SHEET_ID, SHEET_GID: "0" });
+      return ok({ success: false, message: "Aggregation empty; CSV fallback", diagnostics: diag, questions: fb5.questions });
     }
 
     return ok({ success: true, message: "Tallied (API path, display-aware)", questions: questions, diagnostics: diag });
@@ -112,7 +113,7 @@ async function tryCsvFallback(diag, cfg) {
 /* ---------- Display config (exact labels/order) ---------- */
 var DISPLAY_CONFIG = {
   aiUsage: {
-    title: "Which of the following best describes how you’re using AI in your work today? (select all that apply)",
+    title: "Which of the following best describes how you're using AI in your work today? (select all that apply)",
     order: [
       "Discovering or researching creators",
       "Drafting or reviewing creative briefs",
@@ -124,7 +125,7 @@ var DISPLAY_CONFIG = {
     type: "multiple_choice"
   },
   goToTool: {
-    title: "What’s your go-to AI tool (if any) in your current workflow?",
+    title: "What's your go-to AI tool (if any) in your current workflow?",
     type: "single_choice"
   },
   confidence: {
@@ -148,7 +149,7 @@ var DISPLAY_CONFIG = {
     type: "multiple_choice"
   },
   topPriority: {
-    title: "What’s your top priority for this season? (pick 1)",
+    title: "What's your top priority for this season? (pick 1)",
     order: [
       "Learning from guest speakers",
       "Swapping tactics/tools with peers",
@@ -176,88 +177,37 @@ var DISPLAY_CONFIG = {
   }
 };
 
+// optional aliases to improve matching of free-typed variants
+const ALIASES = {
+  "AI for campaign planning & briefing": ["AI for campaign planning and briefing", "campaign planning & briefing"],
+  "AI assistants & internal tooling": ["AI assistants and internal tooling", "assistants & tooling"],
+  "AI for creator discovery": ["creator discovery", "ai for discovery"],
+  "AI and the future of creator platforms": ["future of creator platforms", "creator platforms (future)"],
+  "AI for reviewing creator content": ["reviewing creator content", "content review (ai)"]
+};
+
 /* ---------- Aggregation ---------- */
 function buildQuestionsFromHeadersAndRows(headers, rows) {
   var idx = indexByHeader(headers, {
     aiUsage: "Which of the following best describes",
-    goToTool: "What’s your go-to AI tool",
+    goToTool: "What's your go-to AI tool",
     confidence: "How confident are you",
     curiosity: "Which areas of AI are you most curious",
-    topPriority: "What’s your top priority for this season",
+    topPriority: "What's your top priority for this season",
     creatorAreas: "Which areas of creator marketing"
   });
 
   var questions = [];
+  var respondentIdx = findRespondentIdIndex(headers);
 
   var get = function (row, i) { return String((row[i] || "")).trim(); };
-  var answeredCount = function (colIdx) { return rows.filter(function (r) { return get(r, colIdx).length > 0; }).length; };
 
-  // Multi-select matcher that respects commas inside option labels
-  // Matches by substring against the canonical labels; leftovers become verbatim "Other".
-  function matchCanonicalOptions(answer, canonicalList) {
-    var a = String(answer || "");
-    var lower = a.toLowerCase();
-    var hits = {};
-    var consumed = a;
-
-    canonicalList.forEach(function (opt) {
-      var needle = opt.toLowerCase();
-      if (lower.indexOf(needle) !== -1) {
-        hits[opt] = true;
-        var re = new RegExp(opt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-        consumed = consumed.replace(re, "");
-      }
-    });
-
-    var leftovers = consumed
-      .split(",")
-      .map(function (s) { return s.trim(); })
-      .filter(function (s) { return s.length > 1 && !/^other$/i.test(s) && !/^\(empty\)|^na$/i.test(s); });
-
-    return { hits: Object.keys(hits), leftovers: leftovers };
-  }
-
-  function pushOrderedWithOther(cfgKey, countsMap, otherList, respondentsTotal, order) {
-    var cfg = DISPLAY_CONFIG[cfgKey];
-    if (!cfg || !respondentsTotal) return;
-
-    var responses = [];
-    (order || Object.keys(countsMap)).forEach(function (label) {
-      var count = Number(countsMap[label] || 0);
-      if (count > 0) {
-        responses.push({
-          text: label,
-          count: count,
-          percentage: Math.round((count / respondentsTotal) * 100)
-        });
-      }
-    });
-
-    var verbatim = (otherList || []).filter(Boolean);
-    if (verbatim.length) {
-      responses.push({
-        text: "Other",
-        count: verbatim.length,
-        percentage: Math.round((verbatim.length / respondentsTotal) * 100)
-      });
-    }
-
-    questions.push({
-      question: cfg.title,
-      type: cfg.type,
-      responses: responses,
-      total_responses: respondentsTotal,
-      other_responses: verbatim.length ? verbatim.join(", ") : undefined
-    });
-  }
-
-  // 1) AI usage (multi)
+  // 1) AI usage (multi; substring based; unique respondent denominator; cleaned verbatims)
   if (idx.aiUsage > -1) {
     var orderUsage = DISPLAY_CONFIG.aiUsage.order;
     var countsUsage = {};
     orderUsage.forEach(function (o) { countsUsage[o] = 0; });
     var othersUsage = [];
-    var answeredUsage = answeredCount(idx.aiUsage);
 
     rows.forEach(function (r) {
       var res = matchCanonicalOptions(get(r, idx.aiUsage), orderUsage);
@@ -265,51 +215,50 @@ function buildQuestionsFromHeadersAndRows(headers, rows) {
       othersUsage = othersUsage.concat(res.leftovers);
     });
 
-    pushOrderedWithOther("aiUsage", countsUsage, othersUsage, answeredUsage, orderUsage);
+    var answeredUsage = respondentsWhoAnswered(rows, idx.aiUsage, respondentIdx).size;
+    othersUsage = cleanOtherTextList(othersUsage);
+
+    pushOrderedWithOther(questions, "aiUsage", countsUsage, othersUsage, answeredUsage, orderUsage);
   }
 
-  // 2) Go-to tool (normalize; group <20% into Other) — % out of respondents
+  // 2) Go-to tool (normalize; show any tool >=10% of respondents; group rest as Other)
   if (idx.goToTool > -1) {
     var mapTool = {};
     rows.forEach(function (r) {
       var raw = get(r, idx.goToTool);
-      var items = String(raw || "").split(",").map(function (x) { return x.trim(); }).filter(Boolean);
+      var items = raw.split(",").map(function (x) { return x.trim(); }).filter(Boolean);
       (items.length ? items : [raw]).forEach(function (x) {
         var n = normalizeTool(x);
         if (n) mapTool[n] = (mapTool[n] || 0) + 1;
       });
     });
 
-    var totalTool = answeredCount(idx.goToTool);
-    var tallied = tallyMapToResponses(mapTool).rows;
-
+    var totalTool = respondentsWhoAnswered(rows, idx.goToTool, respondentIdx).size;
     if (totalTool) {
-      var popular = tallied
-        .map(function (r) { return { text: r.text, count: r.count, percentage: Math.round((r.count / totalTool) * 100) }; })
-        .filter(function (r) { return r.percentage >= 20; });
+      var tallied = Object.keys(mapTool)
+        .map(function (k) { return { text: k, count: mapTool[k], percentage: Math.round((mapTool[k] / totalTool) * 100) }; })
+        .sort(function (a, b) { return b.count - a.count; });
 
-      var small = tallied
-        .map(function (r) { return { text: r.text, count: r.count, percentage: Math.round((r.count / totalTool) * 100) }; })
-        .filter(function (r) { return r.percentage < 20; });
+      var keep = tallied.filter(function (r) { return r.percentage >= 10; });
+      var small = tallied.filter(function (r) { return r.percentage < 10; });
 
-      var otherList = [];
+      var otherList = small.map(function (r) { return r.text; });
       if (small.length) {
         var oc = small.reduce(function (s, r) { return s + r.count; }, 0);
-        popular.push({ text: "Other", count: oc, percentage: Math.round((oc / totalTool) * 100) });
-        otherList = small.map(function (r) { return r.text; });
+        keep.push({ text: "Other", count: oc, percentage: Math.round((oc / totalTool) * 100) });
       }
 
       questions.push({
         question: DISPLAY_CONFIG.goToTool.title,
         type: DISPLAY_CONFIG.goToTool.type,
-        responses: popular,
+        responses: keep,
         total_responses: totalTool,
         other_responses: otherList.length ? otherList.join(", ") : undefined
       });
     }
   }
 
-  // 3) Confidence 1–5
+  // 3) Confidence 1–5 (unchanged)
   if (idx.confidence > -1) {
     var orderScale = DISPLAY_CONFIG.confidence.scale;
     var mapConf = { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 };
@@ -331,13 +280,12 @@ function buildQuestionsFromHeadersAndRows(headers, rows) {
     }
   }
 
-  // 4) Curiosity (multi)
+  // 4) Curiosity (multi; alias matching; unique respondent denominator; cleaned verbatims)
   if (idx.curiosity > -1) {
     var orderCur = DISPLAY_CONFIG.curiosity.order;
     var countsCur = {};
     orderCur.forEach(function (o) { countsCur[o] = 0; });
     var othersCur = [];
-    var answeredCur = answeredCount(idx.curiosity);
 
     rows.forEach(function (r) {
       var resCur = matchCanonicalOptions(get(r, idx.curiosity), orderCur);
@@ -345,7 +293,10 @@ function buildQuestionsFromHeadersAndRows(headers, rows) {
       othersCur = othersCur.concat(resCur.leftovers);
     });
 
-    pushOrderedWithOther("curiosity", countsCur, othersCur, answeredCur, orderCur);
+    var answeredCur = respondentsWhoAnswered(rows, idx.curiosity, respondentIdx).size;
+    othersCur = cleanOtherTextList(othersCur);
+
+    pushOrderedWithOther(questions, "curiosity", countsCur, othersCur, answeredCur, orderCur);
   }
 
   // 5) Top priority (single)
@@ -353,23 +304,22 @@ function buildQuestionsFromHeadersAndRows(headers, rows) {
     var orderTop = DISPLAY_CONFIG.topPriority.order;
     var countsTop = {};
     orderTop.forEach(function (o) { countsTop[o] = 0; });
-    var answeredTop = answeredCount(idx.topPriority);
 
     rows.forEach(function (r) {
       var v = get(r, idx.topPriority);
       if (v) countsTop[v] = (countsTop[v] || 0) + 1;
     });
 
-    pushOrderedWithOther("topPriority", countsTop, [], answeredTop, orderTop);
+    var answeredTop = respondentsWhoAnswered(rows, idx.topPriority, respondentIdx).size;
+    pushOrderedWithOther(questions, "topPriority", countsTop, [], answeredTop, orderTop);
   }
 
-  // 6) Creator marketing areas (multi)
+  // 6) Creator marketing areas (multi; alias matching; unique denominator; cleaned verbatims)
   if (idx.creatorAreas > -1) {
     var orderAreas = DISPLAY_CONFIG.creatorAreas.order;
     var countsAreas = {};
     orderAreas.forEach(function (o) { countsAreas[o] = 0; });
     var othersAreas = [];
-    var answeredAreas = answeredCount(idx.creatorAreas);
 
     rows.forEach(function (r) {
       var resA = matchCanonicalOptions(get(r, idx.creatorAreas), orderAreas);
@@ -377,13 +327,16 @@ function buildQuestionsFromHeadersAndRows(headers, rows) {
       othersAreas = othersAreas.concat(resA.leftovers);
     });
 
-    pushOrderedWithOther("creatorAreas", countsAreas, othersAreas, answeredAreas, orderAreas);
+    var answeredAreas = respondentsWhoAnswered(rows, idx.creatorAreas, respondentIdx).size;
+    othersAreas = cleanOtherTextList(othersAreas);
+
+    pushOrderedWithOther(questions, "creatorAreas", countsAreas, othersAreas, answeredAreas, orderAreas);
   }
 
   return questions;
 }
 
-/* ---------- misc helpers ---------- */
+/* ---------- helpers ---------- */
 function indexByHeader(headers, needles) {
   function find(needle) {
     return headers.findIndex(function (h) { return h.toLowerCase().indexOf(needle.toLowerCase()) !== -1; });
@@ -391,6 +344,65 @@ function indexByHeader(headers, needles) {
   var out = {};
   Object.keys(needles).forEach(function (k) { out[k] = find(needles[k]); });
   return out;
+}
+
+function findRespondentIdIndex(headers) {
+  return headers.findIndex(function (h) { return h.toLowerCase().includes("respondent id"); });
+}
+
+function respondentsWhoAnswered(rows, colIdx, respondentIdx) {
+  if (colIdx < 0) return new Set();
+  const set = new Set();
+  rows.forEach(function (r) {
+    const ans = String(r[colIdx] || "").trim();
+    if (ans) {
+      const rid = respondentIdx >= 0 ? String(r[respondentIdx] || "").trim() : "";
+      set.add(rid || "__row_" + Math.random());
+    }
+  });
+  return set;
+}
+
+// Match canonical options by substring (case-insensitive) + alias support.
+// Leftovers (non-canonical text) are returned for "Other responses".
+function matchCanonicalOptions(answer, canonicalList) {
+  const a = String(answer || "");
+  const lower = a.toLowerCase();
+  const hits = new Set();
+  let consumed = a;
+
+  canonicalList.forEach(function (opt) {
+    const names = [opt].concat(ALIASES[opt] || []);
+    const matched = names.some(function (name) {
+      return lower.indexOf(String(name).toLowerCase()) !== -1;
+    });
+    if (matched) {
+      hits.add(opt);
+      const re = new RegExp(opt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      consumed = consumed.replace(re, "");
+    }
+  });
+
+  const leftovers = consumed
+    .split(",")
+    .map(function (s) { return s.trim(); })
+    .filter(function (s) { return s.length > 1 && !/^other\b[:\-\s]*$/i.test(s) && !/^\(empty\)|^na$/i.test(s); });
+
+  return { hits: Array.from(hits), leftovers: leftovers };
+}
+
+function cleanOtherTextList(list) {
+  const out = [];
+  list.forEach(function (s) {
+    let t = String(s || "").trim();
+    if (!t) return;
+    if (/^other\b[:\-\s]*$/i.test(t)) return; // plain "Other"
+    t = t.replace(/^other\b[:\-\s]*/i, "");
+    t = t.replace(/^[-–—:\s]+/, "");
+    t = t.replace(/^"(.+)"$/, "$1").trim();
+    if (t && !/^\(empty\)|^na$/i.test(t)) out.push(t);
+  });
+  return Array.from(new Set(out));
 }
 
 function parseCsv(text) {
@@ -416,12 +428,13 @@ function splitCsvLine(line) {
 }
 
 function normalizeTool(s) {
-  var t = String(s || "").toLowerCase();
+  var t = String(s || "").toLowerCase().trim();
   if (!t) return "";
   if (t === "gpt" || t.indexOf("chat gpt") !== -1 || t.indexOf("chatgpt") !== -1 || t.indexOf("openai") !== -1) return "ChatGPT";
   if (t.indexOf("claude") !== -1) return "Claude";
   if (t.indexOf("gemini") !== -1 || t.indexOf("bard") !== -1) return "Gemini";
   if (t.indexOf("gamma") !== -1) return "Gamma";
+  if (t.indexOf("don’t have") !== -1 || t.indexOf("dont have") !== -1 || t === "none" || t.indexOf("no tool") !== -1) return "None";
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
 }
 
@@ -435,4 +448,39 @@ function tallyMapToResponses(map) {
     .filter(function (r) { return r.count > 0; })
     .sort(function (a, b) { return b.count - a.count; });
   return { rows: rows, total: total };
+}
+
+// Push ordered responses and append an "Other" bar for verbatims (if any)
+function pushOrderedWithOther(arr, cfgKey, countsMap, otherList, respondentsTotal, order) {
+  var cfg = DISPLAY_CONFIG[cfgKey];
+  if (!cfg || !respondentsTotal) return;
+
+  var responses = [];
+  (order || Object.keys(countsMap)).forEach(function (label) {
+    var count = Number(countsMap[label] || 0);
+    if (count > 0) {
+      responses.push({
+        text: label,
+        count: count,
+        percentage: Math.round((count / respondentsTotal) * 100)
+      });
+    }
+  });
+
+  var verbatim = (otherList || []).filter(Boolean);
+  if (verbatim.length) {
+    responses.push({
+      text: "Other",
+      count: verbatim.length,
+      percentage: Math.round((verbatim.length / respondentsTotal) * 100)
+    });
+  }
+
+  arr.push({
+    question: cfg.title,
+    type: cfg.type,
+    responses: responses,
+    total_responses: respondentsTotal,
+    other_responses: verbatim.length ? verbatim.join(", ") : undefined
+  });
 }
