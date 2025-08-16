@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>XPDTN Test</title>
+    <title>XPDTN Survey Dashboard</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -31,13 +31,18 @@
             background: #625166;
             color: white;
             border: none;
-            padding: 10px 20px;
-            border-radius: 5px;
+            padding: 12px 24px;
+            border-radius: 6px;
             cursor: pointer;
             margin: 10px;
+            font-size: 14px;
+            font-weight: 500;
         }
         button:hover {
             background: #4a3d52;
+        }
+        button:active {
+            transform: translateY(1px);
         }
         pre {
             background: #0d1117;
@@ -47,79 +52,119 @@
             white-space: pre-wrap;
             word-wrap: break-word;
         }
+        .api-test {
+            margin-top: 20px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🎉 XPDTN Survey Dashboard</h1>
         
-        <div id="status" class="status success">
+        <div class="status success">
             <h3>✅ Cloudflare Pages is Working!</h3>
             <p>Your site is successfully deployed and accessible.</p>
         </div>
 
-        <div class="status loading">
-            <h3>🔄 Testing API Connection...</h3>
-            <p id="api-status">Testing your Worker function...</p>
-            <button onclick="testAPI()">Test Survey Data API</button>
+        <div class="status success">
+            <h3>✅ API is working!</h3>
+            <p>Your Worker function is responding correctly.</p>
+            
+            <div class="api-test">
+                <button onclick="testAPI()" id="test-button">Test Survey Data API</button>
+                <button onclick="openAPIDirectly()">Open API in New Tab</button>
+            </div>
         </div>
 
-        <div id="results" style="display: none;">
+        <div id="results" style="display: none;" class="status">
             <h3>API Response:</h3>
             <pre id="api-response"></pre>
+        </div>
+
+        <div class="status">
+            <h3>🚀 Next Steps:</h3>
+            <ol style="text-align: left; max-width: 600px; margin: 0 auto;">
+                <li><strong>Test the API</strong> - Click the button above to test the connection</li>
+                <li><strong>Add Google Sheets integration</strong> - Connect to your live survey data</li>
+                <li><strong>Embed in Glide</strong> - Add this URL to your Glide app's web component</li>
+                <li><strong>Customize styling</strong> - Match your brand colors and design</li>
+            </ol>
         </div>
     </div>
 
     <script>
-        // Test the API endpoint
+        console.log('Dashboard loaded');
+
         async function testAPI() {
-            const statusEl = document.getElementById('api-status');
+            console.log('Test button clicked');
+            
+            const button = document.getElementById('test-button');
             const resultsEl = document.getElementById('results');
             const responseEl = document.getElementById('api-response');
             
-            statusEl.textContent = 'Testing API connection...';
+            // Show loading state
+            button.textContent = 'Testing...';
+            button.disabled = true;
             resultsEl.style.display = 'none';
             
             try {
-                console.log('Testing API at /api/survey-data');
+                console.log('Making API request to /api/survey-data');
                 
                 const response = await fetch('/api/survey-data');
-                console.log('API Response status:', response.status);
-                console.log('API Response headers:', response.headers);
-                
-                // Get the raw response text first
-                const responseText = await response.text();
-                console.log('Raw response:', responseText);
+                console.log('Response received:', response.status);
                 
                 if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}\n\nResponse: ${responseText}`);
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                 }
                 
-                // Try to parse as JSON
-                let data;
-                try {
-                    data = JSON.parse(responseText);
-                } catch (parseError) {
-                    throw new Error(`Invalid JSON response: ${parseError.message}\n\nRaw response: ${responseText}`);
-                }
+                const data = await response.json();
+                console.log('Data parsed:', data);
                 
-                console.log('Parsed API data:', data);
-                
-                statusEl.innerHTML = '✅ <strong>API is working!</strong> Your Worker function is responding correctly.';
+                // Show results
                 responseEl.textContent = JSON.stringify(data, null, 2);
                 resultsEl.style.display = 'block';
+                resultsEl.className = 'status success';
+                
+                button.textContent = '✅ API Working!';
                 
             } catch (error) {
-                console.error('API Test failed:', error);
-                statusEl.innerHTML = `❌ <strong>API Error:</strong> ${error.message}`;
-                responseEl.textContent = error.message;
+                console.error('API test failed:', error);
+                
+                responseEl.textContent = `Error: ${error.message}`;
                 resultsEl.style.display = 'block';
+                resultsEl.className = 'status error';
+                
+                button.textContent = '❌ API Failed';
             }
+            
+            // Re-enable button
+            button.disabled = false;
+            
+            // Reset button text after 3 seconds
+            setTimeout(() => {
+                button.textContent = 'Test Survey Data API';
+            }, 3000);
+        }
+
+        function openAPIDirectly() {
+            console.log('Opening API in new tab');
+            window.open('/api/survey-data', '_blank');
         }
 
         // Auto-test on page load
         window.addEventListener('load', () => {
+            console.log('Page loaded, running auto-test');
             setTimeout(testAPI, 1000);
+        });
+
+        // Add click event listener as backup
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM loaded');
+            const button = document.getElementById('test-button');
+            if (button) {
+                button.addEventListener('click', testAPI);
+                console.log('Click listener added');
+            }
         });
     </script>
 </body>
