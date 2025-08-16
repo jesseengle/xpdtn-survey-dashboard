@@ -1,171 +1,310 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>XPDTN Survey Dashboard</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            margin: 0;
-            padding: 40px;
-            background: #1a1a1a;
-            color: white;
-            text-align: center;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-        }
-        .status {
-            background: #2a2a2a;
-            border-radius: 10px;
-            padding: 20px;
-            margin: 20px 0;
-            text-align: left;
-        }
-        .success { border-left: 4px solid #4CAF50; }
-        .loading { border-left: 4px solid #2196F3; }
-        .error { border-left: 4px solid #f44336; }
-        button {
-            background: #625166;
-            color: white;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 6px;
-            cursor: pointer;
-            margin: 10px;
-            font-size: 14px;
-            font-weight: 500;
-        }
-        button:hover {
-            background: #4a3d52;
-        }
-        button:active {
-            transform: translateY(1px);
-        }
-        pre {
-            background: #0d1117;
-            padding: 15px;
-            border-radius: 5px;
-            overflow-x: auto;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-        }
-        .api-test {
-            margin-top: 20px;
-        }
-    </style>
+<meta charset="UTF-8" />
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1.0"
+/>
+<title>XPDTN Season 4 Survey Results - Live Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.6;color:#fff;background:#1a1a1a}
+.loading{padding:40px;text-align:center;color:#9ca3af;font-size:1.1em}
+.error{background:#3d1a1a;color:#ff6b6b;padding:20px;margin:20px;border-radius:10px;border:1px solid #5a2a2a}
+.container{max-width:100%;margin:0;background:#1a1a1a;padding:0 16px}
+.content{padding:5px 0 15px 0;background:#1a1a1a;max-width:100%}
+.section{margin-bottom:25px}
+.survey-question{background:#2a2a2a;border-radius:16px;padding:18px;border:1px solid #3a3a3a;box-shadow:0 3px 8px rgba(0,0,0,.3);animation:slideIn .5s ease-out}
+@keyframes slideIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+.section-title{font-size:1.3em;margin-bottom:8px;color:#fff;font-weight:600;line-height:1.3}
+.response-count{color:#9ca3af;font-size:.9em;margin-bottom:15px}
+.responses-container{background:#1a1a1a;border-radius:12px;padding:0 0 4px 0;border:1px solid #3a3a3a}
+.response-item{display:flex;align-items:center;padding:16px 18px;margin-bottom:4px;border-radius:6px;position:relative;background:#1a1a1a;animation:fadeInBar .8s ease-out}
+@keyframes fadeInBar{from{opacity:0;transform:translateX(-20px)}to{opacity:1;transform:translateX(0)}}
+.response-item:last-child{margin-bottom:0}
+.response-content{flex:1;margin-right:15px;z-index:2;position:relative}
+.response-text{color:#fff;font-weight:600;margin-bottom:0;font-size:1.1em;line-height:1.3}
+.response-bar{position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;border-radius:6px}
+.response-bar-fill{height:100%;background:linear-gradient(90deg,#625166,#4a3d52);transition:width 1.2s ease-in-out;opacity:.8;border-radius:6px;width:0%}
+.response-stats{text-align:right;flex-shrink:0;min-width:75px;z-index:2;position:relative}
+.response-percentage{color:#625166;font-weight:700;font-size:1.2em}
+.response-number{color:#9ca3af;font-size:.85em;margin-top:1px}
+.other-responses{background:#1a1a1a;border-radius:12px;padding:15px;border:1px solid #3a3a3a;margin-top:12px}
+.other-title{color:#625166;font-weight:600;margin-bottom:6px;font-size:1em}
+.other-text{color:#d1d5db;line-height:1.5;font-size:.9em}
+.update-time{text-align:center;color:#6b7280;font-size:.75em;margin-top:15px;margin-bottom:20px;padding:8px}
+@media (max-width:480px){
+  .container{padding:0 12px}
+  .content{padding:3px 0 12px 0}
+  .section-title{font-size:1.2em}
+  .response-text{font-size:1em}
+  .response-percentage{font-size:1.1em}
+  .response-item{padding:14px 16px}
+  .response-content{margin-right:12px}
+  .response-stats{min-width:65px}
+}
+</style>
 </head>
 <body>
-    <div class="container">
-        <h1>🎉 XPDTN Survey Dashboard</h1>
-        
-        <div class="status success">
-            <h3>✅ Cloudflare Pages is Working!</h3>
-            <p>Your site is successfully deployed and accessible.</p>
-        </div>
+  <div id="dashboard-content">
+    <div class="loading">Loading survey data…</div>
+  </div>
 
-        <div class="status success">
-            <h3>✅ API is working!</h3>
-            <p>Your Worker function is responding correctly.</p>
-            
-            <div class="api-test">
-                <button onclick="testAPI()" id="test-button">Test Survey Data API</button>
-                <button onclick="openAPIDirectly()">Open API in New Tab</button>
-            </div>
-        </div>
+<script>
+/* =========================
+   1) FETCH YOUR API
+   ========================= */
+const API_URL = '/api/survey-data'; // same origin as your Cloudflare page
 
-        <div id="results" style="display: none;" class="status">
-            <h3>API Response:</h3>
-            <pre id="api-response"></pre>
-        </div>
+document.addEventListener('DOMContentLoaded', () => {
+  loadAndRender().catch(err => showDashboardError(err.message || String(err)));
+});
 
-        <div class="status">
-            <h3>🚀 Next Steps:</h3>
-            <ol style="text-align: left; max-width: 600px; margin: 0 auto;">
-                <li><strong>Test the API</strong> - Click the button above to test the connection</li>
-                <li><strong>Add Google Sheets integration</strong> - Connect to your live survey data</li>
-                <li><strong>Embed in Glide</strong> - Add this URL to your Glide app's web component</li>
-                <li><strong>Customize styling</strong> - Match your brand colors and design</li>
-            </ol>
+async function loadAndRender() {
+  const res = await fetch(API_URL, { credentials: 'omit' });
+  if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
+  const raw = await res.json();
+
+  // 2) Normalize whatever the API returns into the renderer’s shape
+  const normalized = adaptToRendererShape(raw);
+
+  // 3) Render
+  renderSurveyDashboard(normalized);
+}
+
+/* =========================
+   2) ADAPTER — SHAPE DETECTOR
+   Make the least assumptions and adapt.
+   Target shape per question:
+   {
+     question: string,
+     total_responses: number,
+     responses: [{ text, count, percentage? }],
+     other_responses?: string
+   }
+   ========================= */
+function adaptToRendererShape(raw) {
+  // Quick helpers
+  const isArray = Array.isArray(raw);
+  const hasQ = obj => obj && (obj.question || obj.title || obj.prompt || obj.header);
+
+  // CASE A: Already in the target shape (array of question objects)
+  if (isArray && raw.every(q => hasQ(q) && Array.isArray(q.responses))) {
+    return raw.map(minifyQuestion);
+  }
+
+  // CASE B: Wrapped object like { data: [...]} or { questions: [...] }
+  if (!isArray && raw) {
+    const maybe =
+      raw.questions || raw.data || raw.items || raw.results || raw.survey || raw.payload;
+    if (Array.isArray(maybe) && maybe.every(q => hasQ(q))) {
+      return maybe.map(minifyQuestion);
+    }
+  }
+
+  // CASE C: Dictionary keyed by question text -> response arrays
+  if (!isArray && raw && Object.keys(raw).length && typeof raw === 'object') {
+    const entries = Object.entries(raw).filter(([k,v]) => Array.isArray(v) || typeof v === 'object');
+    if (entries.length) {
+      return entries.map(([key, val]) => {
+        const responses = toResponsesArray(val);
+        return {
+          question: key,
+          total_responses: sumCounts(responses),
+          responses
+        };
+      });
+    }
+  }
+
+  // CASE D: If the API returns a single question object
+  if (hasQ(raw) && Array.isArray(raw.responses)) {
+    return [minifyQuestion(raw)];
+  }
+
+  // CASE E: If the API returns a flat array of options with counts
+  if (isArray && raw.length && looksLikeFlatOptions(raw)) {
+    return [{
+      question: guessQuestionTitle(),
+      total_responses: sumCounts(raw),
+      responses: raw.map(toResp)
+    }];
+  }
+
+  // If we get here, show a helpful error preview
+  console.warn('Unrecognized API shape:', raw);
+  throw new Error('Unrecognized API response shape. Please confirm the JSON keys.');
+}
+
+/* ---------- Adapter helpers ---------- */
+function minifyQuestion(q) {
+  const question =
+    q.question || q.title || q.prompt || q.header || 'Untitled question';
+  const other =
+    q.other_responses || q.other || q.otherResponses || q.otherText || '';
+  let responses = [];
+
+  // Common patterns:
+  if (Array.isArray(q.responses)) {
+    responses = q.responses.map(toResp);
+  } else if (q.options) {
+    responses = toResponsesArray(q.options);
+  } else if (q.choices) {
+    responses = toResponsesArray(q.choices);
+  } else if (q.answers) {
+    responses = toResponsesArray(q.answers);
+  }
+
+  const total = q.total_responses ?? sumCounts(responses);
+  // Compute % if not present
+  responses = responses.map(r => ({
+    text: String(r.text),
+    count: Number(r.count || 0),
+    percentage:
+      typeof r.percentage === 'number'
+        ? Math.round(r.percentage)
+        : (total > 0 ? Math.round((Number(r.count || 0) / total) * 100) : 0)
+  }));
+
+  // Sort: numeric scale if labels are 1..5, otherwise by count desc
+  responses.sort((a,b) => {
+    const na = Number(a.text), nb = Number(b.text);
+    const looksNumeric = !Number.isNaN(na) && !Number.isNaN(nb);
+    return looksNumeric ? na - nb : (b.count - a.count);
+  });
+
+  return {
+    question,
+    total_responses: total,
+    responses,
+    other_responses: other || undefined
+  };
+}
+
+function toResponsesArray(x) {
+  // Accept arrays of strings, arrays of {label,value}, arrays of {text,count}, dictionaries, etc.
+  if (Array.isArray(x)) {
+    // e.g. ["ChatGPT","Claude"] or [{text:"ChatGPT",count:8}] or [{label:"",value:3}]
+    return x.map(toResp);
+  }
+  if (x && typeof x === 'object') {
+    // e.g. { "ChatGPT": 8, "Claude": 3 }
+    return Object.entries(x).map(([k,v]) => toResp({ text: k, count: v }));
+  }
+  return [];
+}
+
+function toResp(item) {
+  if (typeof item === 'string') {
+    return { text: item, count: 1 };
+  }
+  if (typeof item === 'number') {
+    return { text: String(item), count: item };
+  }
+  if (item && typeof item === 'object') {
+    const text = item.text ?? item.label ?? item.option ?? item.name ?? 'Option';
+    const count = item.count ?? item.value ?? item.total ?? item.n ?? 0;
+    const percentage = item.percentage ?? item.percent ?? item.pct;
+    return { text: String(text), count: Number(count || 0), percentage: percentage != null ? Number(percentage) : undefined };
+  }
+  return { text: 'Option', count: 0 };
+}
+
+function looksLikeFlatOptions(arr) {
+  return arr.every(v =>
+    typeof v === 'string' ||
+    typeof v === 'number' ||
+    (v && typeof v === 'object' && ('text' in v || 'label' in v || 'option' in v || 'name' in v))
+  );
+}
+
+function sumCounts(list) {
+  return list.reduce((s, r) => s + Number(r.count || 0), 0);
+}
+
+function guessQuestionTitle() {
+  return 'Survey Results';
+}
+
+/* =========================
+   3) RENDERER (unchanged look)
+   ========================= */
+function renderSurveyDashboard(data) {
+  if (!Array.isArray(data) || data.length === 0) {
+    return showDashboardError('No survey data to display.');
+  }
+
+  // Normalize % if missing and sort where helpful (already handled in adapter)
+  let html = '<div class="container"><div class="content">';
+  data.forEach(q => {
+    html += `
+      <div class="section">
+        <div class="survey-question">
+          <h2 class="section-title">${escapeHTML(q.question)}</h2>
+          <div class="response-count">${q.total_responses} responses</div>
+          <div class="responses-container">
+            ${q.responses.map(r => `
+              <div class="response-item">
+                <div class="response-bar">
+                  <div class="response-bar-fill" style="width:${r.percentage}%"></div>
+                </div>
+                <div class="response-content">
+                  <div class="response-text">${escapeHTML(r.text)}</div>
+                </div>
+                <div class="response-stats">
+                  <div class="response-percentage">${r.percentage}%</div>
+                  <div class="response-number">${r.count} response${r.count===1?'':'s'}</div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+          ${q.other_responses ? `
+            <div class="other-responses">
+              <div class="other-title">Other responses:</div>
+              <div class="other-text">${escapeHTML(q.other_responses)}</div>
+            </div>` : ''
+          }
         </div>
+      </div>
+    `;
+  });
+  html += `
+    <div class="update-time">Last updated: ${new Date().toLocaleString()}</div>
+  </div></div>`;
+
+  const mount = document.getElementById('dashboard-content');
+  mount.innerHTML = html;
+
+  // Animate bars (stagger)
+  setTimeout(() => {
+    document.querySelectorAll('.response-bar-fill').forEach((bar, i) => {
+      const target = bar.style.width;
+      bar.style.width = '0%';
+      setTimeout(() => { bar.style.width = target; }, 100 + i*50);
+    });
+  }, 100);
+}
+
+function showDashboardError(message) {
+  const mount = document.getElementById('dashboard-content');
+  mount.innerHTML = `
+    <div class="error">
+      <h3>Error</h3>
+      <p>${escapeHTML(message)}</p>
+      <p style="margin-top:8px;color:#d1d5db">Tip: open <code style="color:#ffb4b4">/api/survey-data</code> in a new tab to verify the JSON.</p>
     </div>
+  `;
+}
 
-    <script>
-        console.log('Dashboard loaded');
-
-        async function testAPI() {
-            console.log('Test button clicked');
-            
-            const button = document.getElementById('test-button');
-            const resultsEl = document.getElementById('results');
-            const responseEl = document.getElementById('api-response');
-            
-            // Show loading state
-            button.textContent = 'Testing...';
-            button.disabled = true;
-            resultsEl.style.display = 'none';
-            
-            try {
-                console.log('Making API request to /api/survey-data');
-                
-                const response = await fetch('/api/survey-data');
-                console.log('Response received:', response.status);
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                
-                const data = await response.json();
-                console.log('Data parsed:', data);
-                
-                // Show results
-                responseEl.textContent = JSON.stringify(data, null, 2);
-                resultsEl.style.display = 'block';
-                resultsEl.className = 'status success';
-                
-                button.textContent = '✅ API Working!';
-                
-            } catch (error) {
-                console.error('API test failed:', error);
-                
-                responseEl.textContent = `Error: ${error.message}`;
-                resultsEl.style.display = 'block';
-                resultsEl.className = 'status error';
-                
-                button.textContent = '❌ API Failed';
-            }
-            
-            // Re-enable button
-            button.disabled = false;
-            
-            // Reset button text after 3 seconds
-            setTimeout(() => {
-                button.textContent = 'Test Survey Data API';
-            }, 3000);
-        }
-
-        function openAPIDirectly() {
-            console.log('Opening API in new tab');
-            window.open('/api/survey-data', '_blank');
-        }
-
-        // Auto-test on page load
-        window.addEventListener('load', () => {
-            console.log('Page loaded, running auto-test');
-            setTimeout(testAPI, 1000);
-        });
-
-        // Add click event listener as backup
-        document.addEventListener('DOMContentLoaded', function() {
-            console.log('DOM loaded');
-            const button = document.getElementById('test-button');
-            if (button) {
-                button.addEventListener('click', testAPI);
-                console.log('Click listener added');
-            }
-        });
-    </script>
+function escapeHTML(str) {
+  return String(str)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#039;');
+}
+</script>
 </body>
 </html>
