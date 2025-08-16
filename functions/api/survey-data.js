@@ -1,4 +1,4 @@
-// functions/api/survey-data.js — Display-aware, multi-select correct, "Other" last
+// functions/api/survey-data.js — respondent-based % for multi-select, "Other" last
 
 export async function onRequest(context) {
   const diag = {
@@ -22,7 +22,7 @@ export async function onRequest(context) {
         headers: { "content-type": "application/json" },
       });
 
-    // === ENV CHECKS ===
+    // === ENV ===
     diag.steps.push("check-env");
     if (!SHEET_ID) {
       diag.error = "Missing SHEET_ID env var.";
@@ -52,7 +52,7 @@ export async function onRequest(context) {
       return ok({ success: false, message: "Sheets API failed; CSV fallback attempted", diagnostics: diag, ...(fb || {}) });
     }
 
-    // === PARSE VALUES ===
+    // === PARSE ===
     diag.steps.push("parse-api-values");
     const values = Array.isArray(apiJson?.values) ? apiJson.values : [];
     diag.row_count = values.length;
@@ -171,21 +171,25 @@ function buildQuestions(headers, rows) {
 
   const questions = [];
   const get = (row, i) => String((row?.[i] ?? "")).trim();
+  const respondentCount = rows.length;
 
-  // ==== Q1: AI Usage (multi, includes commas in options) ====
+  // ==== Q1: AI Usage (multi) ====
   if (idx.aiUsage > -1) {
-    const { counts, others } = tallyByInclusion(rows, idx.aiUsage, CANONICAL.aiUsage);
+    const { counts, others, otherRespondentCount } =
+      tallyByInclusion(rows, idx.aiUsage, CANONICAL.aiUsage);
     pushMultiQuestion({
       out: questions,
-      title: "Which of the following best describes how you're using AI in your work today? (select all that apply)",
+      title:
+        "Which of the following best describes how you're using AI in your work today? (select all that apply)",
       counts,
       others,
-      respondentCount: rows.length,
-      includeZeroBars: true, // show full canonical set
+      respondentCount,
+      otherCount: otherRespondentCount,
+      includeZeroBars: true,
     });
   }
 
-  // ==== Q2: Go-to Tool (single; normalize; >=10% retained) ====
+  // ==== Q2: Go-to Tool (single; normalize; ≥10% kept) ====
   if (idx.goToTool > -1) {
     const map = Object.create(null);
     rows.forEach((r) => {
@@ -197,8 +201,7 @@ function buildQuestions(headers, rows) {
       });
     });
 
-    const total = rows.length;
-    // Convert to array with raw percentages
+    const total = respondentCount;
     const arr = Object.entries(map)
       .map(([text, count]) => ({
         text,
@@ -207,7 +210,6 @@ function buildQuestions(headers, rows) {
       }))
       .sort((a, b) => b.count - a.count);
 
-    // Keep >=10%, group the rest into Other (last)
     const keep = arr.filter((r) => r.percentage >= 10);
     const drop = arr.filter((r) => r.percentage < 10);
     if (drop.length) {
@@ -251,14 +253,16 @@ function buildQuestions(headers, rows) {
 
   // ==== Q4: AI Curiosity (multi) ====
   if (idx.curiosity > -1) {
-    const { counts, others } = tallyByInclusion(rows, idx.curiosity, CANONICAL.aiCuriosity);
+    const { counts, others, otherRespondentCount } =
+      tallyByInclusion(rows, idx.curiosity, CANONICAL.aiCuriosity);
     pushMultiQuestion({
       out: questions,
       title:
         "Which areas of AI are you most curious to learn more about this season? (pick top 3)",
       counts,
       others,
-      respondentCount: rows.length,
+      respondentCount,
+      otherCount: otherRespondentCount,
       includeZeroBars: true,
     });
   }
@@ -275,27 +279,29 @@ function buildQuestions(headers, rows) {
       .map(([text, count]) => ({
         text,
         count,
-        percentage: total > 0 ? Math.round((count / total) * 100) : 0,
+        percentage: respondentCount > 0 ? Math.round((count / respondentCount) * 100) : 0,
       }))
       .sort((a, b) => b.count - a.count);
     questions.push({
       question: "What’s your top priority for this season? (pick 1)",
       type: "single_choice",
       responses,
-      total_responses: total,
+      total_responses: respondentCount,
     });
   }
 
   // ==== Q6: Creator Marketing Areas (multi) ====
   if (idx.creatorAreas > -1) {
-    const { counts, others } = tallyByInclusion(rows, idx.creatorAreas, CANONICAL.creatorAreas);
+    const { counts, others, otherRespondentCount } =
+      tallyByInclusion(rows, idx.creatorAreas, CANONICAL.creatorAreas);
     pushMultiQuestion({
       out: questions,
       title:
         "Which areas of creator marketing would you be most interested in testing AI tools for?",
       counts,
       others,
-      respondentCount: rows.length,
+      respondentCount,
+      otherCount: otherRespondentCount,
       includeZeroBars: true,
     });
   }
@@ -304,49 +310,49 @@ function buildQuestions(headers, rows) {
 }
 
 /* =========================
-   Multi-select helper that matches canonical options by inclusion,
-   then treats the leftover text snippets as "Other" verbatims.
+   Multi-select tally (canonical inclusion)
+   Returns:
+   - counts: per-canonical option (respondent-based)
+   - others: verbatim fragments
+   - otherRespondentCount: number of respondents who wrote any non-canonical text
    ========================= */
 function tallyByInclusion(rows, colIndex, canonicalList) {
   const counts = Object.create(null);
   canonicalList.forEach((opt) => (counts[opt] = 0));
   const others = [];
+  const otherRows = new Set();
 
-  rows.forEach((r) => {
+  rows.forEach((r, rowIdx) => {
     const raw = String(r?.[colIndex] ?? "").trim();
     if (!raw) return;
 
-    // Track remaining text so we can peel off known options and leave true "other" bits
     let remaining = raw;
 
     canonicalList.forEach((opt) => {
-      if (includesOption(raw, opt)) {
+      if (raw.toLowerCase().includes(opt.toLowerCase())) {
         counts[opt] += 1;
-        // remove matched option from remaining (case-insensitive)
+        // remove opt from remaining
         const re = new RegExp(opt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "ig");
         remaining = remaining.replace(re, "");
       }
     });
 
-    // Whatever is left—split on commas and keep meaningful fragments
-    splitOnCommaRespectingEmpty(remaining)
+    // anything left → "Other" verbatims
+    const frags = splitOnCommaRespectingEmpty(remaining)
       .map((s) => s.trim())
-      .filter((s) => s && s.length > 1 && !/^\(empty\)|^na$/i.test(s))
-      .forEach((frag) => others.push(frag));
+      .filter((s) => s && s.length > 1 && !/^\(empty\)|^na$/i.test(s));
+
+    if (frags.length) {
+      otherRows.add(rowIdx);
+      frags.forEach((f) => others.push(f));
+    }
   });
 
-  return { counts, others };
-}
-
-function includesOption(text, option) {
-  return text.toLowerCase().includes(option.toLowerCase());
+  return { counts, others, otherRespondentCount: otherRows.size };
 }
 
 /* =========================
-   Push a multi-select question
-   - percentages out of total selections
-   - sort by count (desc), "Other" always last
-   - optional includeZeroBars
+   Push multi-select question (respondent-based %)
    ========================= */
 function pushMultiQuestion({
   out,
@@ -354,39 +360,32 @@ function pushMultiQuestion({
   counts,
   others,
   respondentCount,
+  otherCount = 0,
   includeZeroBars = false,
 }) {
-  // Convert counts map → rows (optionally keep zeros)
   const baseRows = Object.entries(counts).map(([text, count]) => ({
     text,
     count: Number(count || 0),
   }));
 
-  // Build "Other" from verbatims
-  const otherCount = others.length;
-  const rowsForMath = [...baseRows, ...(otherCount ? [{ text: "Other", count: otherCount }] : [])];
+  const rowsForMath = [...baseRows];
+  if (otherCount > 0) rowsForMath.push({ text: "Other", count: otherCount });
 
-  // total selections (including other)
-  const totalSelections = rowsForMath.reduce((s, r) => s + r.count, 0);
-
-  // Compute percentages
+  // % of respondents (NOT total selections)
   let rows = rowsForMath.map((r) => ({
     text: r.text,
     count: r.count,
-    percentage: totalSelections > 0 ? Math.round((r.count / totalSelections) * 100) : 0,
+    percentage: respondentCount > 0 ? Math.round((r.count / respondentCount) * 100) : 0,
   }));
 
-  // Sort by count desc, but force "Other" last
   rows = moveOtherLast(rows.sort((a, b) => b.count - a.count));
-
-  // If we are NOT including zeros and a row has 0 count, drop it (except we’re already including all canonical here)
   if (!includeZeroBars) rows = rows.filter((r) => r.count > 0);
 
   out.push({
     question: title,
     type: "multiple_choice",
     responses: rows,
-    total_responses: respondentCount, // keep respondent count for subtitle
+    total_responses: respondentCount,
     ...(others.length ? { other_responses: others.join(", ") } : {}),
   });
 }
@@ -430,11 +429,10 @@ function splitCsvLine(line) {
   return out.map((s) => s.trim());
 }
 
-// Safer comma split (keep empty → returns [])
+// simple comma split
 function splitOnCommaRespectingEmpty(s) {
   const str = String(s || "").trim();
   if (!str) return [];
-  // split on commas not inside quotes (simple case handled above already)
   return str.split(",").map((x) => x.trim()).filter(Boolean);
 }
 
