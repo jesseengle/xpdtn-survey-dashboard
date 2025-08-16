@@ -1,4 +1,5 @@
-// functions/api/survey-data.js — DISPLAY-AWARE, ORDERED + "OTHER LAST"
+// functions/api/survey-data.js — Display-aware, multi-select correct, "Other" last
+
 export async function onRequest(context) {
   const diag = {
     runtime: "Cloudflare Pages Functions",
@@ -16,13 +17,12 @@ export async function onRequest(context) {
     const API_KEY    = context.env.GOOGLE_API_KEY;
     const SHEET_NAME = context.env.SHEET_NAME || "Sheet1";
 
-    const ok = (obj, status = 200) =>
+    const ok = (obj) =>
       new Response(JSON.stringify(obj, null, 2), {
-        status,
         headers: { "content-type": "application/json" },
       });
 
-    // --- Env checks ---------------------------------------------------------
+    // === ENV CHECKS ===
     diag.steps.push("check-env");
     if (!SHEET_ID) {
       diag.error = "Missing SHEET_ID env var.";
@@ -35,7 +35,7 @@ export async function onRequest(context) {
       return ok({ success: false, message: "No API key; CSV fallback attempted", diagnostics: diag, ...(fb || {}) });
     }
 
-    // --- Fetch Google Sheets API -------------------------------------------
+    // === SHEETS API ===
     diag.steps.push("fetch-sheets-api");
     const range = encodeURIComponent(`${SHEET_NAME}!A1:V2000`);
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${range}?key=${API_KEY}`;
@@ -52,58 +52,62 @@ export async function onRequest(context) {
       return ok({ success: false, message: "Sheets API failed; CSV fallback attempted", diagnostics: diag, ...(fb || {}) });
     }
 
-    // --- Parse values -------------------------------------------------------
+    // === PARSE VALUES ===
     diag.steps.push("parse-api-values");
     const values = Array.isArray(apiJson?.values) ? apiJson.values : [];
     diag.row_count = values.length;
 
-    const headerIndex = values.findIndex(row => (row || []).some(cell => String(cell || "").trim().length));
+    const headerIndex = values.findIndex((row) =>
+      (row || []).some((cell) => String(cell || "").trim().length)
+    );
     if (headerIndex === -1) {
       diag.parse_error = "No non-empty rows found.";
       const fb = await tryCsvFallback(diag, { SHEET_ID, SHEET_GID: "0" });
       return ok({ success: false, message: "No non-empty rows; CSV fallback attempted", diagnostics: diag, ...(fb || {}) });
     }
 
-    const headers = values[headerIndex].map(v => String(v || "").trim());
+    const headers = values[headerIndex].map((v) => String(v || "").trim());
     const rows = values.slice(headerIndex + 1);
     diag.detected_header_row = headerIndex + 1;
     diag.detected_headers_preview = headers.slice(0, 12);
 
-    // --- Build questions (ordered, other-last, correct %s) ------------------
-    const questions = buildQuestionsFromHeadersAndRows(headers, rows);
+    const questions = buildQuestions(headers, rows);
 
-    if (!questions.length) {
-      diag.aggregation_note = "Aggregation produced 0 questions; trying CSV fallback for comparison.";
-      const fb = await tryCsvFallback(diag, { SHEET_ID, SHEET_GID: "0" });
-      return ok({ success: false, message: "Aggregation empty; CSV fallback attempted", diagnostics: diag, ...(fb || {}) });
-    }
-
-    return ok({ success: true, message: "Tallied (API path, display-aware)", questions, diagnostics: diag });
-
-  } catch (err) {
-    const diagErr = { unhandled: String(err?.message || err) };
-    return new Response(JSON.stringify({ success: false, message: "Unhandled error", ...diagErr }, null, 2), {
-      status: 200,
-      headers: { "content-type": "application/json" },
+    return ok({
+      success: true,
+      message: "Tallied (API path, display-aware)",
+      questions,
+      diagnostics: diag,
     });
+  } catch (err) {
+    return new Response(
+      JSON.stringify(
+        { success: false, message: "Unhandled error", error: String(err?.message || err) },
+        null,
+        2
+      ),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
   }
 }
 
 /* =========================
-   CSV FALLBACK (no API key)
+   CSV FALLBACK
    ========================= */
 async function tryCsvFallback(diag, { SHEET_ID, SHEET_GID = "0" }) {
   try {
     diag.steps.push("csv-fallback");
     if (!SHEET_ID) throw new Error("No SHEET_ID for CSV fallback.");
-    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${encodeURIComponent(SHEET_GID)}`;
+    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${encodeURIComponent(
+      SHEET_GID
+    )}`;
     const r = await fetch(url);
     diag.csv_status = `${r.status} ${r.statusText}`;
     if (!r.ok) throw new Error(`CSV fallback error: ${r.status} ${r.statusText}`);
     const csv = await r.text();
     const { headers, rows } = parseCsv(csv);
     diag.csv_headers_preview = headers.slice(0, 12);
-    const questions = buildQuestionsFromHeadersAndRows(headers, rows);
+    const questions = buildQuestions(headers, rows);
     return { csv_fallback: true, questions };
   } catch (e) {
     diag.csv_error = String(e?.message || e);
@@ -112,17 +116,16 @@ async function tryCsvFallback(diag, { SHEET_ID, SHEET_GID = "0" }) {
 }
 
 /* =========================
-   Aggregation (display rules)
+   Question building
    ========================= */
-function buildQuestionsFromHeadersAndRows(headers, rows) {
-  // locate columns by substrings so header text can vary
+function buildQuestions(headers, rows) {
   const idx = indexByHeader(headers, {
-    aiUsage: 'Which of the following best describes',
+    aiUsage: "Which of the following best describes",
     goToTool: "What’s your go-to AI tool",
-    confidence: 'How confident are you',
-    curiosity: 'Which areas of AI are you most curious',
-    topPriority: 'What’s your top priority for this season',
-    creatorAreas: 'Which areas of creator marketing'
+    confidence: "How confident are you",
+    curiosity: "Which areas of AI are you most curious",
+    topPriority: "What’s your top priority for this season",
+    creatorAreas: "Which areas of creator marketing",
   });
 
   const CANONICAL = {
@@ -132,7 +135,7 @@ function buildQuestionsFromHeadersAndRows(headers, rows) {
       "Writing emails, captions, or campaign copy",
       "Analyzing campaign results",
       "Generating images or video",
-      // Do NOT include "Other" here; we add it after and count it correctly.
+      "I'm not using AI at work yet",
     ],
     aiCuriosity: [
       "AI for creator discovery",
@@ -143,7 +146,7 @@ function buildQuestionsFromHeadersAndRows(headers, rows) {
       "Ethical implications / disclosure guidelines",
       "AI and brand safety",
       "How creators themselves are using AI",
-      "AI and the future of creator platforms"
+      "AI and the future of creator platforms",
     ],
     creatorAreas: [
       "Creator Discovery & Vetting",
@@ -155,298 +158,294 @@ function buildQuestionsFromHeadersAndRows(headers, rows) {
       "Competitor Monitoring & Trend Tracking",
       "Creative Co-Pilots for UGC",
       "Marketplace Optimization (e.g. TikTok Shop, Amazon Influencer)",
-      "Internal Knowledge Systems & Institutional Memory"
+      "Internal Knowledge Systems & Institutional Memory",
     ],
     topPriority: [
       "Learning from guest speakers",
       "Swapping tactics/tools with peers",
       "Discovering new AI use cases",
       "Connecting 1:1 with others in similar roles",
-      "Having a regular space to reflect and stay sharp"
-    ]
+      "Having a regular space to reflect and stay sharp",
+    ],
   };
 
-  const Q = [];
+  const questions = [];
+  const get = (row, i) => String((row?.[i] ?? "")).trim();
 
-  // utilities
-  const get = (row, i) => String((row[i] ?? "")).trim();
-  const splitMulti = (s) => String(s || "")
-    .split(",")
-    .map(x => x.trim())
-    .filter(Boolean);
-
-  // ---------- 1) AI Usage (multi; ordered; Other last with verbatims) ----------
+  // ==== Q1: AI Usage (multi, includes commas in options) ====
   if (idx.aiUsage > -1) {
-    const order = CANONICAL.aiUsage;
-    const counts = Object.fromEntries(order.map(o => [o, 0]));
-    const otherVerbatims = new Set();
-    const otherRows = new Set();
-    let respondents = 0;
-
-    rows.forEach((r, rIdx) => {
-      const raw = get(r, idx.aiUsage);
-      if (!raw) return;
-      respondents += 1;
-
-      const sels = splitMulti(raw);
-      sels.forEach(sel => {
-        // exact canonical match (case-insensitive)
-        const match = order.find(o => o.toLowerCase() === sel.toLowerCase());
-        if (match) {
-          counts[match] += 1;
-        } else if (!/^\(empty\)|^na$/i.test(sel)) {
-          otherRows.add(rIdx);
-          otherVerbatims.add(sel);
-        }
-      });
-    });
-
-    const responses = order.map(text => ({
-      text,
-      count: counts[text],
-      percentage: respondents ? Math.round((counts[text] / respondents) * 100) : 0,
-    }));
-
-    // "Other" goes LAST
-    if (otherRows.size) {
-      responses.push({
-        text: "Other",
-        count: otherRows.size,
-        percentage: respondents ? Math.round((otherRows.size / respondents) * 100) : 0,
-      });
-    }
-
-    Q.push({
-      question: "Which of the following best describes how you're using AI in your work today? (select all that apply)",
-      type: "multiple_choice",
-      responses,
-      total_responses: respondents,
-      ...(otherVerbatims.size ? { other_responses: Array.from(otherVerbatims).join(", ") } : {})
+    const { counts, others } = tallyByInclusion(rows, idx.aiUsage, CANONICAL.aiUsage);
+    pushMultiQuestion({
+      out: questions,
+      title: "Which of the following best describes how you're using AI in your work today? (select all that apply)",
+      counts,
+      others,
+      respondentCount: rows.length,
+      includeZeroBars: true, // show full canonical set
     });
   }
 
-  // ---------- 2) Go-to AI tool (single; normalize; >=10% or group to 'Other' last) ----------
+  // ==== Q2: Go-to Tool (single; normalize; >=10% retained) ====
   if (idx.goToTool > -1) {
-    const toolCounts = Object.create(null);
-    let respondents = 0;
-
-    rows.forEach(r => {
+    const map = Object.create(null);
+    rows.forEach((r) => {
       const raw = get(r, idx.goToTool);
-      if (!raw) return;
-      respondents += 1;
-      const items = splitMulti(raw);
-      (items.length ? items : [raw]).forEach(x => {
+      const items = splitOnCommaRespectingEmpty(raw);
+      (items.length ? items : [raw]).forEach((x) => {
         const n = normalizeTool(x);
-        if (!n) return;
-        toolCounts[n] = (toolCounts[n] || 0) + 1;
+        if (n) map[n] = (map[n] || 0) + 1;
       });
     });
 
-    // build rows with denominator = respondents
-    const all = Object.entries(toolCounts).map(([text, count]) => ({
-      text,
-      count,
-      percentage: respondents ? Math.round((count / respondents) * 100) : 0
-    }));
+    const total = rows.length;
+    // Convert to array with raw percentages
+    const arr = Object.entries(map)
+      .map(([text, count]) => ({
+        text,
+        count,
+        percentage: total > 0 ? Math.round((count / total) * 100) : 0,
+      }))
+      .sort((a, b) => b.count - a.count);
 
-    // keep tools >= 10%, group the rest into "Other"
-    const keep = all.filter(r => r.percentage >= 10).sort((a,b)=>b.count-a.count);
-    const small = all.filter(r => r.percentage < 10).sort((a,b)=>b.count-a.count);
-    if (small.length) {
-      const oc = small.reduce((s, r) => s + r.count, 0);
+    // Keep >=10%, group the rest into Other (last)
+    const keep = arr.filter((r) => r.percentage >= 10);
+    const drop = arr.filter((r) => r.percentage < 10);
+    if (drop.length) {
+      const oc = drop.reduce((s, r) => s + r.count, 0);
       keep.push({
         text: "Other",
         count: oc,
-        percentage: respondents ? Math.round((oc / respondents) * 100) : 0
+        percentage: total > 0 ? Math.round((oc / total) * 100) : 0,
       });
     }
 
-    Q.push({
-      question: "What's your go-to AI tool?",
+    questions.push({
+      question: "What’s your go-to AI tool (if any) in your current workflow?",
       type: "single_choice",
-      responses: keep,
-      total_responses: respondents,
-      ...(small.length ? { other_responses: small.map(r => r.text).join(", ") } : {})
+      responses: moveOtherLast(keep),
+      total_responses: total,
+      ...(drop.length ? { other_responses: Array.from(new Set(drop.map((d) => d.text))).join(", ") } : {}),
     });
   }
 
-  // ---------- 3) Confidence (scale 1–5) ----------
+  // ==== Q3: Confidence (scale 1–5) ====
   if (idx.confidence > -1) {
-    const map = { "1":0,"2":0,"3":0,"4":0,"5":0 };
-    let respondents = 0;
-    rows.forEach(r => {
-      const val = get(r, idx.confidence);
-      if (!val) return;
-      respondents += 1;
-      const n = Number(val);
+    const map = { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 };
+    rows.forEach((r) => {
+      const n = Number(get(r, idx.confidence));
       if (n >= 1 && n <= 5) map[String(n)] += 1;
     });
-
-    const responses = ["1","2","3","4","5"].map(k => ({
+    const total = Object.values(map).reduce((s, n) => s + n, 0);
+    const responses = ["1", "2", "3", "4", "5"].map((k) => ({
       text: k,
       count: map[k],
-      percentage: respondents ? Math.round((map[k] / respondents) * 100) : 0
+      percentage: total > 0 ? Math.round((map[k] / total) * 100) : 0,
     }));
-
-    Q.push({
+    questions.push({
       question: "How confident are you in using AI tools in your creator marketing work? (1–5)",
       type: "scale",
       responses,
-      total_responses: respondents
+      total_responses: total,
     });
   }
 
-  // ---------- 4) Areas of AI (multi; ordered; Other last) ----------
+  // ==== Q4: AI Curiosity (multi) ====
   if (idx.curiosity > -1) {
-    const order = CANONICAL.aiCuriosity;
-    const counts = Object.fromEntries(order.map(o => [o, 0]));
-    const otherVerbatims = new Set();
-    const otherRows = new Set();
-    let respondents = 0;
-
-    rows.forEach((r, rIdx) => {
-      const raw = get(r, idx.curiosity);
-      if (!raw) return;
-      respondents += 1;
-      splitMulti(raw).forEach(sel => {
-        const match = order.find(o => o.toLowerCase() === sel.toLowerCase());
-        if (match) counts[match] += 1;
-        else if (!/^\(empty\)|^na$/i.test(sel)) {
-          otherRows.add(rIdx);
-          otherVerbatims.add(sel);
-        }
-      });
-    });
-
-    const responses = order.map(text => ({
-      text,
-      count: counts[text],
-      percentage: respondents ? Math.round((counts[text] / respondents) * 100) : 0,
-    }));
-
-    if (otherRows.size) {
-      responses.push({
-        text: "Other",
-        count: otherRows.size,
-        percentage: respondents ? Math.round((otherRows.size / respondents) * 100) : 0,
-      });
-    }
-
-    Q.push({
-      question: "Which areas of AI are you most curious to learn more about this season? (pick top 3)",
-      type: "multiple_choice",
-      responses,
-      total_responses: respondents,
-      ...(otherVerbatims.size ? { other_responses: Array.from(otherVerbatims).join(", ") } : {})
+    const { counts, others } = tallyByInclusion(rows, idx.curiosity, CANONICAL.aiCuriosity);
+    pushMultiQuestion({
+      out: questions,
+      title:
+        "Which areas of AI are you most curious to learn more about this season? (pick top 3)",
+      counts,
+      others,
+      respondentCount: rows.length,
+      includeZeroBars: true,
     });
   }
 
-  // ---------- 5) Top priority (single; ordered) ----------
+  // ==== Q5: Top priority (single) ====
   if (idx.topPriority > -1) {
-    const order = CANONICAL.topPriority;
-    const counts = Object.fromEntries(order.map(o => [o, 0]));
-    let respondents = 0;
-
-    rows.forEach(r => {
-      const raw = get(r, idx.topPriority);
-      if (!raw) return;
-      respondents += 1;
-      const match = order.find(o => o.toLowerCase() === raw.toLowerCase());
-      if (match) counts[match] += 1;
+    const map = Object.create(null);
+    rows.forEach((r) => {
+      const v = get(r, idx.topPriority);
+      if (v) map[v] = (map[v] || 0) + 1;
     });
-
-    const responses = order.map(text => ({
-      text,
-      count: counts[text],
-      percentage: respondents ? Math.round((counts[text] / respondents) * 100) : 0
-    }));
-
-    Q.push({
-      question: "What's your top priority for this season?",
+    const total = Object.values(map).reduce((s, n) => s + n, 0);
+    const responses = Object.entries(map)
+      .map(([text, count]) => ({
+        text,
+        count,
+        percentage: total > 0 ? Math.round((count / total) * 100) : 0,
+      }))
+      .sort((a, b) => b.count - a.count);
+    questions.push({
+      question: "What’s your top priority for this season? (pick 1)",
       type: "single_choice",
       responses,
-      total_responses: respondents
+      total_responses: total,
     });
   }
 
-  // ---------- 6) Areas of creator marketing (multi; ordered; Other last; include 0s) ----------
+  // ==== Q6: Creator Marketing Areas (multi) ====
   if (idx.creatorAreas > -1) {
-    const order = CANONICAL.creatorAreas;
-    const counts = Object.fromEntries(order.map(o => [o, 0]));
-    const otherVerbatims = new Set();
-    const otherRows = new Set();
-    let respondents = 0;
-
-    rows.forEach((r, rIdx) => {
-      const raw = get(r, idx.creatorAreas);
-      if (!raw) return;
-      respondents += 1;
-      splitMulti(raw).forEach(sel => {
-        const match = order.find(o => o.toLowerCase() === sel.toLowerCase());
-        if (match) counts[match] += 1;
-        else if (!/^\(empty\)|^na$/i.test(sel)) {
-          otherRows.add(rIdx);
-          otherVerbatims.add(sel);
-        }
-      });
-    });
-
-    const responses = order.map(text => ({
-      text,
-      count: counts[text],
-      percentage: respondents ? Math.round((counts[text] / respondents) * 100) : 0,
-    }));
-
-    if (otherRows.size) {
-      responses.push({
-        text: "Other",
-        count: otherRows.size,
-        percentage: respondents ? Math.round((otherRows.size / respondents) * 100) : 0,
-      });
-    }
-
-    Q.push({
-      question: "Which areas of creator marketing would you be most interested in testing AI tools for?",
-      type: "multiple_choice",
-      responses,
-      total_responses: respondents,
-      ...(otherVerbatims.size ? { other_responses: Array.from(otherVerbatims).join(", ") } : {})
+    const { counts, others } = tallyByInclusion(rows, idx.creatorAreas, CANONICAL.creatorAreas);
+    pushMultiQuestion({
+      out: questions,
+      title:
+        "Which areas of creator marketing would you be most interested in testing AI tools for?",
+      counts,
+      others,
+      respondentCount: rows.length,
+      includeZeroBars: true,
     });
   }
 
-  return Q;
+  return questions;
 }
 
-/* ---------- helpers ---------- */
+/* =========================
+   Multi-select helper that matches canonical options by inclusion,
+   then treats the leftover text snippets as "Other" verbatims.
+   ========================= */
+function tallyByInclusion(rows, colIndex, canonicalList) {
+  const counts = Object.create(null);
+  canonicalList.forEach((opt) => (counts[opt] = 0));
+  const others = [];
+
+  rows.forEach((r) => {
+    const raw = String(r?.[colIndex] ?? "").trim();
+    if (!raw) return;
+
+    // Track remaining text so we can peel off known options and leave true "other" bits
+    let remaining = raw;
+
+    canonicalList.forEach((opt) => {
+      if (includesOption(raw, opt)) {
+        counts[opt] += 1;
+        // remove matched option from remaining (case-insensitive)
+        const re = new RegExp(opt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "ig");
+        remaining = remaining.replace(re, "");
+      }
+    });
+
+    // Whatever is left—split on commas and keep meaningful fragments
+    splitOnCommaRespectingEmpty(remaining)
+      .map((s) => s.trim())
+      .filter((s) => s && s.length > 1 && !/^\(empty\)|^na$/i.test(s))
+      .forEach((frag) => others.push(frag));
+  });
+
+  return { counts, others };
+}
+
+function includesOption(text, option) {
+  return text.toLowerCase().includes(option.toLowerCase());
+}
+
+/* =========================
+   Push a multi-select question
+   - percentages out of total selections
+   - sort by count (desc), "Other" always last
+   - optional includeZeroBars
+   ========================= */
+function pushMultiQuestion({
+  out,
+  title,
+  counts,
+  others,
+  respondentCount,
+  includeZeroBars = false,
+}) {
+  // Convert counts map → rows (optionally keep zeros)
+  const baseRows = Object.entries(counts).map(([text, count]) => ({
+    text,
+    count: Number(count || 0),
+  }));
+
+  // Build "Other" from verbatims
+  const otherCount = others.length;
+  const rowsForMath = [...baseRows, ...(otherCount ? [{ text: "Other", count: otherCount }] : [])];
+
+  // total selections (including other)
+  const totalSelections = rowsForMath.reduce((s, r) => s + r.count, 0);
+
+  // Compute percentages
+  let rows = rowsForMath.map((r) => ({
+    text: r.text,
+    count: r.count,
+    percentage: totalSelections > 0 ? Math.round((r.count / totalSelections) * 100) : 0,
+  }));
+
+  // Sort by count desc, but force "Other" last
+  rows = moveOtherLast(rows.sort((a, b) => b.count - a.count));
+
+  // If we are NOT including zeros and a row has 0 count, drop it (except we’re already including all canonical here)
+  if (!includeZeroBars) rows = rows.filter((r) => r.count > 0);
+
+  out.push({
+    question: title,
+    type: "multiple_choice",
+    responses: rows,
+    total_responses: respondentCount, // keep respondent count for subtitle
+    ...(others.length ? { other_responses: others.join(", ") } : {}),
+  });
+}
+
+/* =========================
+   Utilities
+   ========================= */
+function moveOtherLast(arr) {
+  const main = [];
+  const others = [];
+  arr.forEach((r) => (r.text.toLowerCase() === "other" ? others.push(r) : main.push(r)));
+  return [...main, ...others];
+}
+
 function indexByHeader(headers, needles) {
-  const find = (needle) => headers.findIndex(h => h.toLowerCase().includes(needle.toLowerCase()));
+  const find = (needle) =>
+    headers.findIndex((h) => h.toLowerCase().includes(needle.toLowerCase()));
   return Object.fromEntries(Object.entries(needles).map(([k, n]) => [k, find(n)]));
 }
+
 function parseCsv(text) {
-  const lines = text.split("\n").filter(l => l.trim().length);
+  const lines = text.split("\n").filter((l) => l.trim().length);
   if (lines.length < 2) return { headers: [], rows: [] };
-  const headers = splitCsvLine(lines[0]).map(h => h.replace(/"/g,'').trim());
+  const headers = splitCsvLine(lines[0]).map((h) => h.replace(/"/g, "").trim());
   const rows = lines.slice(1).map(splitCsvLine);
   return { headers, rows };
 }
 function splitCsvLine(line) {
-  const out = []; let cur = ""; let q = false;
-  for (let i=0;i<line.length;i++){
-    const c=line[i];
+  const out = [];
+  let cur = "";
+  let q = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
     if (c === '"') q = !q;
-    else if (c === ',' && !q){ out.push(cur); cur = ""; }
-    else cur += c;
+    else if (c === "," && !q) {
+      out.push(cur);
+      cur = "";
+    } else cur += c;
   }
   out.push(cur);
-  return out.map(s => s.trim());
+  return out.map((s) => s.trim());
 }
-function normalizeTool(s){
-  const t = String(s||'').toLowerCase().trim();
-  if(!t) return '';
-  if (t==='gpt' || t.includes('chat gpt') || t.includes('chatgpt') || t.includes('openai')) return 'ChatGPT';
-  if (t.includes('claude')) return 'Claude';
-  if (t.includes('gemini') || t.includes('bard')) return 'Gemini';
-  if (t.includes('gamma')) return 'Gamma';
-  // Title-case first char as a fallback
-  return s ? s[0].toUpperCase() + s.slice(1) : '';
+
+// Safer comma split (keep empty → returns [])
+function splitOnCommaRespectingEmpty(s) {
+  const str = String(s || "").trim();
+  if (!str) return [];
+  // split on commas not inside quotes (simple case handled above already)
+  return str.split(",").map((x) => x.trim()).filter(Boolean);
+}
+
+function normalizeTool(s) {
+  const t = String(s || "").trim();
+  if (!t) return "";
+  const tl = t.toLowerCase();
+  if (tl === "gpt" || tl.includes("chat gpt") || tl.includes("chatgpt") || tl.includes("openai"))
+    return "ChatGPT";
+  if (tl.includes("claude")) return "Claude";
+  if (tl.includes("gemini") || tl.includes("bard")) return "Gemini";
+  if (tl.includes("gamma")) return "Gamma";
+  return t.charAt(0).toUpperCase() + t.slice(1);
 }
