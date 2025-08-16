@@ -228,20 +228,21 @@ function buildQuestionsFromHeadersAndRows(headers, rows) {
   const respondents = (colIdx) =>
     rows.filter((r) => get(r, colIdx).length > 0).length;
 
-  // 1) AI usage (multi, ordered, “Other” last) — % out of respondents
+  // 1) AI usage (multi; substring-based, ordered; “Other” verbatims)
   if (idx.aiUsage > -1) {
-    const map = Object.create(null);
-    CANONICAL.aiUsage.forEach((v) => (map[v] = 0));
-    const other = [];
-    const answered = respondents(idx.aiUsage);
+    const order = DISPLAY_CONFIG.aiUsage.order;
+    const counts = Object.fromEntries(order.map(o => [o, 0]));
+    let others = [];
+    const answered = rows.filter(r => get(r, idx.aiUsage)).length;
 
-    rows.forEach((r) => {
-      splitMulti(get(r, idx.aiUsage)).forEach((sel) => {
-        const m = CANONICAL.aiUsage.find((o) => o.toLowerCase() === sel.toLowerCase());
-        if (m) map[m] += 1;
-        else if (!/^\(empty\)|^na$/i.test(sel)) other.push(sel);
-      });
+    rows.forEach(r => {
+      const { hits, leftovers } = matchCanonicalOptions(get(r, idx.aiUsage), order);
+      hits.forEach(h => counts[h] += 1);
+      others.push(...leftovers);
     });
+
+    pushOrderedWithOther(questions, "aiUsage", counts, others, answered, order);
+  }
 
     const q = buildDisplayOrderedQuestion(
       "aiUsage",
@@ -332,20 +333,19 @@ function buildQuestionsFromHeadersAndRows(headers, rows) {
 
   // 4) Curiosity (multi)
   if (idx.curiosity > -1) {
-    const map = Object.create(null);
-    CANONICAL.aiCuriosity.forEach((v) => (map[v] = 0));
-    const other = [];
-    const answered = respondents(idx.curiosity);
+    const order = DISPLAY_CONFIG.curiosity.order;
+    const counts = Object.fromEntries(order.map(o => [o, 0]));
+    let others = [];
+    const answered = rows.filter(r => get(r, idx.curiosity)).length;
 
-    rows.forEach((r) => {
-      splitMulti(get(r, idx.curiosity)).forEach((sel) => {
-        const m = CANONICAL.aiCuriosity.find(
-          (o) => o.toLowerCase() === sel.toLowerCase()
-        );
-        if (m) map[m] += 1;
-        else if (!/^\(empty\)|^na$/i.test(sel)) other.push(sel);
-      });
+    rows.forEach(r => {
+      const { hits, leftovers } = matchCanonicalOptions(get(r, idx.curiosity), order);
+      hits.forEach(h => counts[h] += 1);
+      others.push(...leftovers);
     });
+
+    pushOrderedWithOther(questions, "curiosity", counts, others, answered, order);
+  }
 
     const q = buildDisplayOrderedQuestion(
       "curiosity",
@@ -380,20 +380,19 @@ function buildQuestionsFromHeadersAndRows(headers, rows) {
 
   // 6) Creator marketing areas (multi)
   if (idx.creatorAreas > -1) {
-    const map = Object.create(null);
-    DISPLAY_CONFIG.creatorAreas.order.forEach((v) => (map[v] = 0));
-    const other = [];
-    const answered = respondents(idx.creatorAreas);
+    const order = DISPLAY_CONFIG.creatorAreas.order;
+    const counts = Object.fromEntries(order.map(o => [o, 0]));
+    let others = [];
+    const answered = rows.filter(r => get(r, idx.creatorAreas)).length;
 
-    rows.forEach((r) => {
-      splitMulti(get(r, idx.creatorAreas)).forEach((sel) => {
-        const m = DISPLAY_CONFIG.creatorAreas.order.find(
-          (o) => o.toLowerCase() === sel.toLowerCase()
-        );
-        if (m) map[m] += 1;
-        else if (!/^\(empty\)|^na$/i.test(sel)) other.push(sel);
-      });
+    rows.forEach(r => {
+      const { hits, leftovers } = matchCanonicalOptions(get(r, idx.creatorAreas), order);
+      hits.forEach(h => counts[h] += 1);
+      others.push(...leftovers);
     });
+
+    pushOrderedWithOther(questions, "creatorAreas", counts, others, answered, order);
+  }
 
     const q = buildDisplayOrderedQuestion(
       "creatorAreas",
@@ -500,4 +499,63 @@ function tallyMapToResponses(map) {
     .filter((r) => r.count > 0)
     .sort((a, b) => b.count - a.count);
   return { rows, total };
+}
+// Match canonical options by substring (case-insensitive; robust to commas)
+function matchCanonicalOptions(answer, canonicalList) {
+  const a = String(answer || "");
+  const lower = a.toLowerCase();
+  const hits = new Set();
+  let consumed = a; // we’ll strip matched labels out to find leftovers
+
+  canonicalList.forEach(opt => {
+    const needle = opt.toLowerCase();
+    if (lower.includes(needle)) {
+      hits.add(opt);
+      // remove once (best-effort) to avoid duplicating "other" extraction
+      const re = new RegExp(opt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      consumed = consumed.replace(re, "");
+    }
+  });
+
+  // Remaining bits, split by comma and clean
+  const leftovers = consumed
+    .split(",")
+    .map(s => s.trim())
+    .filter(s => s.length > 1 && !/^other$/i.test(s) && !/^\(empty\)|^na$/i.test(s));
+
+  return { hits, leftovers };
+}
+
+function pushOrderedWithOther(questions, cfgKey, map, otherList, respondentsTotal, order) {
+  const cfg = DISPLAY_CONFIG[cfgKey];
+  if (!cfg || !respondentsTotal) return;
+  const responses = [];
+
+  (order || Object.keys(map)).forEach(label => {
+    const count = Number(map[label] || 0);
+    if (count > 0) {
+      responses.push({
+        text: label,
+        count,
+        percentage: Math.round((count / respondentsTotal) * 100),
+      });
+    }
+  });
+
+  const verbatim = (otherList || []).filter(Boolean);
+  if (verbatim.length) {
+    responses.push({
+      text: "Other",
+      count: verbatim.length,
+      percentage: Math.round((verbatim.length / respondentsTotal) * 100),
+    });
+  }
+
+  questions.push({
+    question: DISPLAY_CONFIG[cfgKey].title,
+    type: DISPLAY_CONFIG[cfgKey].type,
+    responses,
+    total_responses: respondentsTotal,
+    ...(verbatim.length ? { other_responses: verbatim.join(", ") } : {}),
+  });
 }
